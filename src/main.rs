@@ -1,4 +1,4 @@
-use std::{path::PathBuf, time::SystemTime};
+use std::time::SystemTime;
 use std::io::Write;
 use std::time::Duration;
 use log::{debug, Record, Level};
@@ -7,39 +7,9 @@ use env_logger::{Builder, Env};
 use colored::*;
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
-use git2::{BranchType, Repository, FetchOptions, RemoteCallbacks, Cred, AutotagOption};
+use git2::{BranchType, Repository};
 
-fn get_repo_name(repo: &Repository) -> String {
-    let result = || -> Result<String, Box<dyn std::error::Error>> {
-        let repo_path: PathBuf = repo.path().canonicalize()?;
-
-        let repo_root = repo_path
-            .parent()
-            .and_then(|p| p.file_name())
-            .ok_or_else(|| Box::<dyn std::error::Error>::from("Could not determine repository name"))?;
-
-        Ok(repo_root.to_string_lossy().into_owned())
-    };
-
-    result().unwrap_or_else(|_| "Unknown".to_string())
-}
-
-/// Completely updates the given repository from the origin.
-pub fn fetch_all(repo: &Repository, remote_name: &str) -> Result<(), git2::Error> {
-    let mut remote = repo.find_remote(remote_name)?;
-    let mut callbacks = RemoteCallbacks::new();
-    callbacks.credentials(move |url, username_from_url, _| {
-        Cred::credential_helper(&repo.config()?, url, username_from_url)
-    });
-    let mut fetch_options = FetchOptions::new();
-    fetch_options.remote_callbacks(callbacks);
-    fetch_options.download_tags(AutotagOption::All);
-    fetch_options.update_fetchhead(true);
-    fetch_options.prune(git2::FetchPrune::On);
-    remote.fetch(&[] as &[&str], Some(&mut fetch_options), None)?;
-
-    Ok(())
-}
+mod git_utils;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -61,6 +31,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     if args.verbose {
+        // Set up logging
         Builder::from_env(Env::default().default_filter_or("debug"))
             .format(|buf, record: &Record| {
                 let level = match record.level() {
@@ -76,24 +47,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .format_timestamp(None)
             .format_target(false)
             .init();
-
-        debug!("Verbose mode enabled");
     }
 
-    // TODO: Disable spinner if verbose enabled
+    // Initialize progress bar if not verbose
+    let progress = if !args.verbose {
+        Some(ProgressBar::new_spinner())
+    } else { 
+        None 
+    };
 
-    let spinner = ProgressBar::new_spinner();
-    spinner.set_message("Fetching...");
-    spinner.enable_steady_tick(Duration::from_millis(100));
+    // Set up progress bar
+    if let Some(ref progress) = progress {
+        progress.set_message("Fetching...");
+        progress.enable_steady_tick(Duration::from_millis(100));
+        progress.set_style(ProgressStyle::default_spinner()
+            .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
+            .template("{spinner} {msg}")
+            .expect("Invalid template"));
+    }
+    
+    let repo = Repository::open(".").expect("No Git repository found in current directory.");
+    git_utils::fetch_remote(&repo, "origin")?;
 
-    spinner.set_style(ProgressStyle::default_spinner()
-        .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
-        .template("{spinner} {msg}")
-        .expect("Invalid template"));
-
-    let repo = Repository::open(".").expect("Not a Git repository");
-    fetch_all(&repo, "origin")?;
-    spinner.set_message("Scanning branches...");
+    if let Some(ref progress) = progress {
+        progress.set_message("Scanning branches...");
+    }
 
     let mut branch_ages = Vec::new();
     for branch_result in repo.branches(None)? {
@@ -112,14 +90,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() as u64;
             let age = Duration::from_secs(now - commit_time).as_secs() / 86400;
             branch_ages.push(BranchAge { name: name.to_string(), age: age });
-            
-           debug!("Found {} branch named {} that is {} days old.", kind, name, age);
         }
+
+        debug!("Found {}:{} branch.", kind, name);
     }
     
-    spinner.finish_and_clear();
-    branch_ages.sort_by(|a, b| b.age.cmp(&a.age));
+    if let Some(ref progress) = progress {
+        progress.finish_and_clear();
+    }
 
+    branch_ages.sort_by(|a, b| b.age.cmp(&a.age));
     let max_name_len = branch_ages.iter().map(|b| b.name.len()).max().unwrap_or(10);
 
     println!("{:<width$}  {}", "Branch", "Age (days)", width = max_name_len);
