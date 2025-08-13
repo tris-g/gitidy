@@ -17,6 +17,9 @@ struct Args {
     #[arg(short, long)]
     yes: bool,
 
+    #[arg(long, default_value_t = 30)]
+    stale: u64,
+
     #[arg(short, long)]
     quiet: bool,
 
@@ -25,8 +28,9 @@ struct Args {
 }
 
 #[derive(Debug)]
-struct BranchAge {
+struct BranchDetails {
     name: String,
+    kind: String,
     age: u64,
 }
 
@@ -76,7 +80,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         progress.set_message("Scanning branches...");
     }
 
-    let mut branch_ages = Vec::new();
+    let mut branches = Vec::new();
     for branch_result in repo.branches(None)? {
         let (branch, branch_type) = branch_result?;
 
@@ -92,7 +96,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let commit_time = commit.time().seconds() as u64;
             let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() as u64;
             let age = Duration::from_secs(now - commit_time).as_secs() / 86400;
-            branch_ages.push(BranchAge { name: name.to_string(), age: age });
+            if age > args.stale {
+                branches.push(BranchDetails { name: name.to_string(), kind: kind.to_string(), age: age });
+            }
         }
 
         debug!("Found {}:{} branch.", kind, name);
@@ -102,19 +108,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         progress.finish_and_clear();
     }
 
-    branch_ages.sort_by(|a, b| b.age.cmp(&a.age));
-    let max_name_len = branch_ages.iter().map(|b| b.name.len()).max().unwrap_or(10);
+    branches.sort_by(|a, b| b.age.cmp(&a.age));
 
-    println!("{:<width$}  {}", "Branch", "Age (days)", width = max_name_len);
-    println!("{:-<width$}  {:-<10}", "", "", width = max_name_len);
+    let max_name_len = branches
+        .iter()
+        .map(|b| b.name.len())
+        .max()
+        .unwrap_or(10);
 
-    for branch in branch_ages {
-        println!(
-            "{:<width$}  {:>10}",
-            branch.name,
-            branch.age,
-            width = max_name_len
-        );
+    if !args.quiet {
+        println!("Found {} stale branches.", branches.len());
+        for branch in &branches {
+            let branch_str = format!("{:<width$}", branch.name, width = max_name_len).green();
+            let age_str = format!("{}d", branch.age).blue();
+            println!(
+                "* {}  {}",
+                branch_str,
+                age_str,
+            );
+        }
     }
 
     Ok(())
