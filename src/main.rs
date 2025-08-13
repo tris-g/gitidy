@@ -15,10 +15,13 @@ mod git_utils;
 #[command(version, about, long_about = None)]
 struct Args {
     #[arg(short, long)]
-    verbose: bool,
+    yes: bool,
 
     #[arg(short, long)]
-    yes: bool,
+    quiet: bool,
+
+    #[arg(short, long)]
+    verbose: bool,
 }
 
 #[derive(Debug)]
@@ -49,8 +52,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .init();
     }
 
-    // Initialize progress bar if not verbose
-    let progress = if !args.verbose {
+    // Initialize progress bar if not quiet or verbose
+    let progress = if !(args.quiet || args.verbose) {
         Some(ProgressBar::new_spinner())
     } else { 
         None 
