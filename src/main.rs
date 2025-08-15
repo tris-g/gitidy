@@ -1,4 +1,5 @@
-use std::time::SystemTime;
+use std::thread;
+use std::{io, time::SystemTime};
 use std::io::Write;
 use std::time::Duration;
 use log::{debug, Record, Level};
@@ -10,6 +11,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use git2::{BranchType, Repository};
 
 mod git_utils;
+mod io_utils;
 
 #[derive(Parser)]
 #[command(name = "purgit")]
@@ -20,7 +22,7 @@ struct Cli {
 
     #[arg(short, long, global = true)]
     verbose: bool,
-    
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -138,6 +140,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         age_str,
                     );
                 }
+            }
+
+            if *yes && let Some(ref progress) = progress {
+                progress.set_message("");
+                progress.enable_steady_tick(Duration::from_millis(100));
+                progress.reset();
+            }
+            
+            let mut deleted_count = 0;
+
+            for branch in &branches {
+                let confirmed = io_utils::confirm(&format!("Delete branch {}?", branch.name), *yes);
+                
+                if confirmed {
+                    if *yes && let Some(ref progress) = progress {
+                        progress.set_message(format!("Deleting {}...", branch.name));
+                    }
+
+                    // Delete branch here
+                    thread::sleep(Duration::from_millis(250)); // Simulating work
+
+                    deleted_count += 1;
+                    debug!("Deleted branch {}", branch.name);
+                }
+                
+                if let Some(ref progress) = progress {
+                    progress.inc(1);
+                }
+            }
+
+            if let Some(ref progress) = progress {
+                progress.finish_and_clear();
+            }
+
+            if !cli.quiet {
+                println!("Deleted {} stale branches.", deleted_count);
             }
         }
     }
